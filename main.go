@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"html/template"
 	"log"
@@ -8,12 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/gomniauth"
 	"github.com/stretchr/gomniauth/providers/google"
 	"github.com/stretchr/objx"
 	"github.com/stretchr/signature"
 )
+
+var sessions sync.Map
 
 type templateHandler struct {
 	templ *template.Template
@@ -21,8 +26,14 @@ type templateHandler struct {
 
 func (t *templateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{}
-	if c, err := r.Cookie("auth"); err == nil {
-		data["UserData"] = objx.MustFromBase64(c.Value)
+	if c, err := r.Cookie("username"); err == nil {
+		b, err := base64.StdEncoding.DecodeString(c.Value)
+		if err != nil {
+			log.Println("DecodeString error: ", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		data["username"] = string(b)
 	}
 	if err := t.templ.Execute(w, data); err != nil {
 		log.Println("Execute error: ", err)
@@ -42,12 +53,23 @@ type authHandler struct {
 }
 
 func (a *authHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	_, err := r.Cookie("auth")
+	c, err := r.Cookie("session")
 	if err == nil {
+		b, err := base64.StdEncoding.DecodeString(c.Value)
+		if err != nil {
+			log.Println("DecodeString error: ", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, ok := sessions.Load(string(b))
+		if !ok {
+			w.Header().Set("Location", "/login")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
 		a.next.ServeHTTP(w, r)
 		return
 	}
-	// TODO: ここで cookie の確認
 	if err == http.ErrNoCookie {
 		w.Header().Set("Location", "/login")
 		w.WriteHeader(http.StatusTemporaryRedirect)
@@ -108,15 +130,21 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-
-		// JSON 形式の文字列を base64 変換する
-		// e.g. `{"name":"yamada taro"}`
-		authValues := objx.New(map[string]interface{}{
-			"name": user.Name(),
-		}).MustBase64()
+		session, err := uuid.NewRandom()
+		if err != nil {
+			log.Println("NewRandom error: ", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		sessions.Store(session.String(), struct{}{})
 		http.SetCookie(w, &http.Cookie{
-			Name:  "auth",
-			Value: authValues,
+			Name:  "username",
+			Value: base64.StdEncoding.EncodeToString([]byte(user.Name())),
+			Path:  "/",
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:  "session",
+			Value: base64.StdEncoding.EncodeToString([]byte(session.String())),
 			Path:  "/",
 		})
 		w.Header().Set("Location", "/")
