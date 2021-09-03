@@ -155,6 +155,21 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:   "session",
+		Path:   "/",
+		MaxAge: -1,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:   "username",
+		Path:   "/",
+		MaxAge: -1,
+	})
+	w.Header().Set("Location", "/")
+	w.WriteHeader(http.StatusTemporaryRedirect)
+}
+
 func main() {
 	addr := "localhost:8080"
 
@@ -173,6 +188,7 @@ func main() {
 
 	http.Handle("/", MustAuth(newTemplateHandler(filepath.FromSlash(`templates/index.html`))))
 	http.Handle("/login", newTemplateHandler(filepath.FromSlash(`templates/login.html`)))
+	http.HandleFunc("/logout", logoutHandler)
 	http.HandleFunc("/auth/", loginHandler)
 	log.Println("server is running: ", addr)
 	if err := http.ListenAndServe(addr, nil); err != nil {
